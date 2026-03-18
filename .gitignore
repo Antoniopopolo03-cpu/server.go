@@ -1,0 +1,9 @@
+# il file sotto non compare su github
+
+file_che_non_compare_su_github.txt
+
+## se vuoi che non si pushino dei files che soddisfano un pattern puoi anche farlo (invece di specificare i files uno a uno)
+#es: con il comando di sotto diciamo di non pushare nessuno dei files che terminano in ".sh"
+
+*.sh
+
