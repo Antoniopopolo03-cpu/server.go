@@ -13,7 +13,7 @@ guarda il cambiamento che ho fatto, che evita di dover fare il check della coinc
 e.g.---
 
 prima:
-
+```go
 func rootHandler(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -21,13 +21,15 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Fprintf(w, "status healthy")
 }
+```
+
 
 dopo:
-
+```go
 func rootHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "status healthy")
 }
-
+```
  
 4.todo: guarda come integrare swagger per documentare le api (chiedi a cursor): viene creato un endpoint speciale per vederre la documentazione
 poi lo apri nel browser;
