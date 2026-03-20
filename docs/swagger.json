@@ -1,0 +1,73 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "Documentazione API con Swagger",
+        "title": "API Server Go",
+        "contact": {},
+        "version": "1.0"
+    },
+    "host": "localhost:3000",
+    "basePath": "/",
+    "paths": {
+        "/": {
+            "get": {
+                "description": "Risponde \"status healthy\" sulla root",
+                "produces": [
+                    "text/plain"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Health check",
+                "responses": {
+                    "200": {
+                        "description": "status healthy",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/saluta": {
+            "get": {
+                "description": "Risponde \"ciao\" o \"ciao {nome}\"",
+                "produces": [
+                    "text/plain"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Saluta il server",
+                "responses": {
+                    "200": {
+                        "description": "ciao\"  \"ciao {nome}",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/saluta/con-bestemmia": {
+            "get": {
+                "description": "Risponde \"Porco Dio\" o \"ciao {nome} che voi Porco Dio\"",
+                "produces": [
+                    "text/plain"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Bestemmia il server",
+                "responses": {
+                    "200": {
+                        "description": "Porco Dio\"  \"ciao {nome} che voi Porco Dio",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

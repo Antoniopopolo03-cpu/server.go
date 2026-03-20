@@ -1,0 +1,48 @@
+basePath: /
+host: localhost:3000
+info:
+  contact: {}
+  description: Documentazione API con Swagger
+  title: API Server Go
+  version: "1.0"
+paths:
+  /:
+    get:
+      description: Risponde "status healthy" sulla root
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: status healthy
+          schema:
+            type: string
+      summary: Health check
+      tags:
+      - system
+  /saluta:
+    get:
+      description: Risponde "ciao" o "ciao {nome}"
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: ciao"  "ciao {nome}
+          schema:
+            type: string
+      summary: Saluta il server
+      tags:
+      - system
+  /saluta/con-bestemmia:
+    get:
+      description: Risponde "Porco Dio" o "ciao {nome} che voi Porco Dio"
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: Porco Dio"  "ciao {nome} che voi Porco Dio
+          schema:
+            type: string
+      summary: Bestemmia il server
+      tags:
+      - system
+swagger: "2.0"
