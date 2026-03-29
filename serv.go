@@ -198,6 +198,8 @@ func main() {
 	http.HandleFunc("/saluta", salutaHandler)
 	http.HandleFunc("/llm", llmHandler)
 	http.HandleFunc("/naruto/chat", narutoChatHandler)
+	// WebSocket chat: ws://localhost:3000/ws/chat  oppure  ?god=1 per modalità senza Dattebayo
+	http.HandleFunc("/ws/chat", chatWebSocketHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {
