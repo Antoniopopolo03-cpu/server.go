@@ -3,6 +3,7 @@ module server
 go 1.25.5
 
 require (
+	github.com/joho/godotenv v1.5.1
 	github.com/swaggo/http-swagger v1.3.4
 	github.com/swaggo/swag v1.16.4
 )

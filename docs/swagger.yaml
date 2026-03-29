@@ -1,4 +1,25 @@
 basePath: /
+definitions:
+  main.LLMRequest:
+    properties:
+      prompt:
+        type: string
+    type: object
+  main.LLMResponse:
+    properties:
+      answer:
+        type: string
+    type: object
+  main.NarutoChatRequest:
+    properties:
+      message:
+        type: string
+    type: object
+  main.NarutoChatResponse:
+    properties:
+      reply:
+        type: string
+    type: object
 host: localhost:3000
 info:
   contact: {}
@@ -19,6 +40,50 @@ paths:
       summary: Health check
       tags:
       - system
+  /llm:
+    post:
+      consumes:
+      - application/json
+      description: Invia un prompt all'LLM e ritorna la risposta
+      parameters:
+      - description: Prompt body
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/main.LLMRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.LLMResponse'
+      summary: Ask LLM
+      tags:
+      - llm
+  /naruto/chat:
+    post:
+      consumes:
+      - application/json
+      description: Cerca su Dattebayo e risponde in italiano pulito via OpenAI
+      parameters:
+      - description: Messaggio utente
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/main.NarutoChatRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.NarutoChatResponse'
+      summary: Chat Naruto (Dattebayo + OpenAI)
+      tags:
+      - naruto
   /saluta:
     get:
       description: Risponde "ciao" o "ciao {nome}"

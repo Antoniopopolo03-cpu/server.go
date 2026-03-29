@@ -29,6 +29,74 @@
                 }
             }
         },
+        "/llm": {
+            "post": {
+                "description": "Invia un prompt all'LLM e ritorna la risposta",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "llm"
+                ],
+                "summary": "Ask LLM",
+                "parameters": [
+                    {
+                        "description": "Prompt body",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/main.LLMRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/main.LLMResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/naruto/chat": {
+            "post": {
+                "description": "Cerca su Dattebayo e risponde in italiano pulito via OpenAI",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "naruto"
+                ],
+                "summary": "Chat Naruto (Dattebayo + OpenAI)",
+                "parameters": [
+                    {
+                        "description": "Messaggio utente",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/main.NarutoChatRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/main.NarutoChatResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/saluta": {
             "get": {
                 "description": "Risponde \"ciao\" o \"ciao {nome}\"",
@@ -66,6 +134,40 @@
                             "type": "string"
                         }
                     }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "main.LLMRequest": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.LLMResponse": {
+            "type": "object",
+            "properties": {
+                "answer": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.NarutoChatRequest": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.NarutoChatResponse": {
+            "type": "object",
+            "properties": {
+                "reply": {
+                    "type": "string"
                 }
             }
         }

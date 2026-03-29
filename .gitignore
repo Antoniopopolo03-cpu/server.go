@@ -6,7 +6,9 @@ file_che_non_compare_su_github.txt
 #es: con il comando di sotto diciamo di non pushare nessuno dei files che terminano in ".sh"
 
 *.sh
-
+*.env
+*.gopath/
+*server
 
 
 
