@@ -6,10 +6,36 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 )
 
 const dattebayoBaseURL = "https://dattebayo-api.onrender.com"
+
+// stringSliceFlexible decodifica JSON sia come array di stringhe sia come singola stringa
+// (l'API Dattebayo a volte manda "classification" in un modo o nell'altro).
+type stringSliceFlexible []string
+
+func (s *stringSliceFlexible) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*s = nil
+		return nil
+	}
+	if len(data) > 0 && data[0] == '"' {
+		var one string
+		if err := json.Unmarshal(data, &one); err != nil {
+			return err
+		}
+		*s = []string{one}
+		return nil
+	}
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err != nil {
+		return err
+	}
+	*s = arr
+	return nil
+}
 
 // --- Request/response del tuo endpoint /naruto/chat ---
 
@@ -33,11 +59,11 @@ type dattebayoCharacter struct {
 	Name     string   `json:"name"`
 	Images   []string `json:"images"`
 	Personal struct {
-		Clan           string   `json:"clan"`
-		Affiliation    []string `json:"affiliation"`
-		Sex            string   `json:"sex"`
-		Birthdate      string   `json:"birthdate"`
-		Classification []string `json:"classification"`
+		Clan           string              `json:"clan"`
+		Affiliation    stringSliceFlexible `json:"affiliation"`
+		Sex            string              `json:"sex"`
+		Birthdate      string              `json:"birthdate"`
+		Classification stringSliceFlexible `json:"classification"`
 	} `json:"personal"`
 	Rank struct {
 		NinjaRank struct {
@@ -51,6 +77,8 @@ type dattebayoCharacter struct {
 		Manga string `json:"manga"`
 	} `json:"debut"`
 	Family map[string]string `json:"family"`
+	// Lista molto lunga nell'API; inclusa in bozza solo se l'utente chiede tecniche/jutsu
+	Jutsu []string `json:"jutsu"`
 }
 
 // --- JSON Dattebayo (clan) ---
@@ -129,9 +157,23 @@ func shortFactualQuery(msg string) bool {
 	return false
 }
 
+// includeJutsuInDraft: se true, nella bozza si allegano le tecniche dall'API (lista troncata).
+func includeJutsuInDraft(userQuery string) bool {
+	m := strings.ToLower(userQuery)
+	keys := []string{
+		"tecnic", "jutsu", "rasengan", "clone", "ombra", "combatt", "lotta", "abilità", "abilita", "sa fare", "cosa sa",
+	}
+	for _, k := range keys {
+		if strings.Contains(m, k) {
+			return true
+		}
+	}
+	return false
+}
+
 // --- Bozza per OpenAI ---
 
-func draftFromCharacters(list []dattebayoCharacter) string {
+func draftFromCharacters(list []dattebayoCharacter, userQuery string) string {
 	if len(list) == 0 {
 		return "Nessun personaggio trovato nell'API Dattebayo per questa ricerca."
 	}
@@ -148,13 +190,16 @@ func draftFromCharacters(list []dattebayoCharacter) string {
 			b.WriteString(fmt.Sprintf("  Clan: %s\n", c.Personal.Clan))
 		}
 		if len(c.Personal.Affiliation) > 0 {
-			b.WriteString(fmt.Sprintf("  Affiliazione: %s\n", strings.Join(c.Personal.Affiliation, ", ")))
+			b.WriteString(fmt.Sprintf("  Affiliazione: %s\n", strings.Join([]string(c.Personal.Affiliation), ", ")))
 		}
 		if c.Personal.Sex != "" {
 			b.WriteString(fmt.Sprintf("  Sesso: %s\n", c.Personal.Sex))
 		}
 		if c.Personal.Birthdate != "" {
 			b.WriteString(fmt.Sprintf("  Compleanno: %s\n", c.Personal.Birthdate))
+		}
+		if len(c.Personal.Classification) > 0 {
+			b.WriteString(fmt.Sprintf("  Classificazione: %s\n", strings.Join([]string(c.Personal.Classification), ", ")))
 		}
 		r := c.Rank.NinjaRank
 		if r.PartI != "" || r.PartII != "" || r.Gaiden != "" {
@@ -168,6 +213,19 @@ func draftFromCharacters(list []dattebayoCharacter) string {
 		}
 		if len(c.Images) > 0 {
 			b.WriteString(fmt.Sprintf("  Immagine (prima URL): %s\n", c.Images[0]))
+		}
+		if includeJutsuInDraft(userQuery) && len(c.Jutsu) > 0 {
+			jLimit := 45
+			if len(c.Jutsu) < jLimit {
+				jLimit = len(c.Jutsu)
+			}
+			b.WriteString(fmt.Sprintf("  Tecniche/jutsu registrate nell'API (prime %d di %d):\n", jLimit, len(c.Jutsu)))
+			for j := 0; j < jLimit; j++ {
+				b.WriteString(fmt.Sprintf("    • %s\n", c.Jutsu[j]))
+			}
+			if len(c.Jutsu) > jLimit {
+				b.WriteString(fmt.Sprintf("    ... altre %d tecniche presenti solo nell'API\n", len(c.Jutsu)-jLimit))
+			}
 		}
 		b.WriteString("\n")
 	}
@@ -188,6 +246,101 @@ func draftFromClans(list []dattebayoClan) string {
 			cl.Name, cl.ID, len(cl.Characters)))
 	}
 	return b.String()
+}
+
+// runNarutoChatPipeline esegue Dattebayo → bozza → OpenAI (stessa logica di POST /naruto/chat).
+// Usata da HTTP e WebSocket per evitare duplicazione.
+func runNarutoChatPipeline(message string) (string, error) {
+	msg := strings.TrimSpace(message)
+	if msg == "" {
+		return "", fmt.Errorf("message is required")
+	}
+
+	collection := detectCollection(msg)
+	term := extractSearchTerm(msg)
+
+	raw, err := dattebayoGET(collection, term, 5)
+	if err != nil {
+		return "", fmt.Errorf("dattebayo request failed: %w", err)
+	}
+
+	var draft string
+	switch collection {
+	case "clans":
+		var parsed dattebayoClansResponse
+		if err := json.Unmarshal(raw, &parsed); err != nil {
+			return "", fmt.Errorf("failed parsing clans json: %w", err)
+		}
+		draft = draftFromClans(parsed.Clans)
+	default:
+		var parsed dattebayoCharactersResponse
+		if err := json.Unmarshal(raw, &parsed); err != nil {
+			return "", fmt.Errorf("failed parsing characters json: %w", err)
+		}
+		draft = draftFromCharacters(parsed.Characters, msg)
+	}
+
+	var system string
+	if shortFactualQuery(msg) {
+		system = `Sei un assistente che risponde a domande puntuali su personaggi Naruto.
+Rispondi in ITALIANO con UNA SOLA parola o al massimo TRE parole (es. "biondo", "azzurri", "non presente nei dati").
+Niente frasi, niente spiegazioni, niente punti finali, niente virgolette.
+Usa SOLO le informazioni presenti nel testo dati dall'utente (dati API).
+Se l'informazione richiesta NON compare chiaramente in quei dati, rispondi esattamente: non presente nei dati`
+	} else {
+		system = `Sei un assistente per informazioni su Naruto (universo anime/manga).
+Rispondi SEMPRE in italiano.
+
+PRECISIONE:
+- Rispondi in modo DIRETTO alla domanda dell'utente nelle prime 1-2 frasi.
+- Usa SOLO il blocco "Dati API" qui sotto (nessuna conoscenza esterna se quei dati bastano).
+- Se compare la sezione "Tecniche/jutsu registrate nell'API" e l'utente chiede tecniche o capacità di combattimento,
+  elenca o commenta SOLO tecniche presenti in quell'elenco (puoi scegliere le più rilevanti per la domanda).
+- NON dire che mancano informazioni sulle tecniche se quell'elenco è presente e non vuoto.
+- Se davvero non ci sono dati utili (nessun personaggio, elenco vuoto, ecc.), dillo in una frase breve senza inventare.
+Non mostrare JSON nella risposta finale.`
+	}
+
+	userContent := "Domanda esatta dell'utente: " + msg + "\n\nDati API Dattebayo (unica fonte per fatti):\n" + draft
+	return openAIChat(system, userContent)
+}
+
+// godModeSystemPrompt definisce come risponde la god mode (tutto in OpenAI, senza Dattebayo).
+// Priorità: 1) variabile d'ambiente GOD_MODE_SYSTEM (testo completo del system prompt)
+//           2) altrimenti GOD_MODE_STYLE: default | breve | elenco | didattico
+func godModeSystemPrompt() string {
+	if s := strings.TrimSpace(os.Getenv("GOD_MODE_SYSTEM")); s != "" {
+		return s
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("GOD_MODE_STYLE"))) {
+	case "breve", "short":
+		return `Sei un esperto Naruto. Rispondi SEMPRE in italiano.
+Risposte BREVISSIME: massimo 3-5 frasi totali, vai dritto al punto.
+Puoi usare conoscenza generale (non sei limitato a Dattebayo).
+Se la domanda è secca (es. un solo dato), rispondi anche con una sola frase.`
+	case "elenco", "bullet", "punti":
+		return `Sei un esperto Naruto. Rispondi SEMPRE in italiano.
+Struttura la risposta con elenco puntato (2-8 punti) quando ha senso.
+Puoi usare conoscenza generale. Sii chiaro e ordinato.`
+	case "didattico", "lungo":
+		return `Sei un esperto Naruto (anime, manga, lore). Rispondi SEMPRE in italiano.
+Spiega in modo didattico: contesto, nomi, timeline se serve, ma resta coerente.
+Puoi usare conoscenza generale. Se qualcosa è incerto o varia tra versioni, dillo.`
+	default:
+		return `Sei un assistente esperto dell'universo Naruto (anime, manga, lore).
+Rispondi SEMPRE in italiano, in modo chiaro.
+In questa modalità NON sei limitato ai dati dell'API Dattebayo: puoi usare la tua conoscenza generale.
+Se qualcosa è incerto o varia tra versioni, indicalo brevemente.`
+	}
+}
+
+// runNarutoChatGod salta Dattebayo: OpenAI risponde con conoscenza generale (modalità "god").
+func runNarutoChatGod(message string) (string, error) {
+	msg := strings.TrimSpace(message)
+	if msg == "" {
+		return "", fmt.Errorf("message is required")
+	}
+	return openAIChat(godModeSystemPrompt(), msg)
 }
 
 // @Summary      Chat Naruto (Dattebayo + OpenAI)
@@ -214,53 +367,7 @@ func narutoChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	collection := detectCollection(req.Message)
-	term := extractSearchTerm(req.Message)
-
-	raw, err := dattebayoGET(collection, term, 5)
-	if err != nil {
-		http.Error(w, "dattebayo request failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-
-	var draft string
-	switch collection {
-	case "clans":
-		var parsed dattebayoClansResponse
-		if err := json.Unmarshal(raw, &parsed); err != nil {
-			http.Error(w, "failed parsing clans json", http.StatusInternalServerError)
-			return
-		}
-		draft = draftFromClans(parsed.Clans)
-	default:
-		var parsed dattebayoCharactersResponse
-		if err := json.Unmarshal(raw, &parsed); err != nil {
-			http.Error(w, "failed parsing characters json", http.StatusInternalServerError)
-			return
-		}
-		draft = draftFromCharacters(parsed.Characters)
-	}
-
-	var system string
-	if shortFactualQuery(req.Message) {
-		system = `Sei un assistente che risponde a domande puntuali su personaggi Naruto.
-Rispondi in ITALIANO con UNA SOLA parola o al massimo TRE parole (es. "biondo", "azzurri", "non presente nei dati").
-Niente frasi, niente spiegazioni, niente punti finali, niente virgolette.
-Usa SOLO le informazioni presenti nel testo dati dall'utente (dati API).
-Se l'informazione richiesta NON compare chiaramente in quei dati, rispondi esattamente: non presente nei dati`
-	} else {
-		system = `Sei un assistente per informazioni su Naruto (universo anime/manga).
-Rispondi SEMPRE in italiano, in modo chiaro e leggibile (circa 6-14 righe).
-Usa SOLO le informazioni presenti nel testo dati dall'utente (dati API Dattebayo).
-Se i dati dicono che non ci sono risultati, spiegalo chiaramente.
-Non inventare fatti non presenti nei dati.
-Non mostrare JSON nella risposta finale.`
-	}
-
-	// Opzionale: rendi esplicita la domanda nell'input del modello
-	userContent := "Domanda utente: " + req.Message + "\n\nDati API:\n" + draft
-
-	reply, err := openAIChat(system, userContent)
+	reply, err := runNarutoChatPipeline(req.Message)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
