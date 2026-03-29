@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 const dattebayoBaseURL = "https://dattebayo-api.onrender.com"
@@ -109,12 +111,19 @@ func dattebayoGET(collection, name string, limit int) ([]byte, error) {
 	}
 	u.RawQuery = q.Encode()
 
+	slog.Info("dattebayo: GET", "collection", collection, "name", name, "url", u.String())
+	start := time.Now()
+
 	resp, err := http.Get(u.String())
 	if err != nil {
+		slog.Error("dattebayo: request failed", "error", err, "duration", time.Since(start))
 		return nil, err
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+
+	body, err := io.ReadAll(resp.Body)
+	slog.Info("dattebayo: response", "status", resp.StatusCode, "body_len", len(body), "duration", time.Since(start))
+	return body, err
 }
 
 // --- Router messaggio utente ---
@@ -258,6 +267,7 @@ func runNarutoChatPipeline(message string) (string, error) {
 
 	collection := detectCollection(msg)
 	term := extractSearchTerm(msg)
+	slog.Info("naruto: pipeline start", "collection", collection, "term", term, "factual", shortFactualQuery(msg))
 
 	raw, err := dattebayoGET(collection, term, 5)
 	if err != nil {
@@ -340,6 +350,7 @@ func runNarutoChatGod(message string) (string, error) {
 	if msg == "" {
 		return "", fmt.Errorf("message is required")
 	}
+	slog.Info("naruto: god mode", "message_len", len(msg))
 	return openAIChat(godModeSystemPrompt(), msg)
 }
 

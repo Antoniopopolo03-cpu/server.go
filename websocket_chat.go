@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -38,10 +38,12 @@ func chatWebSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println("websocket upgrade:", err)
+		slog.Error("ws: upgrade failed", "error", err, "remote", r.RemoteAddr)
 		return
 	}
 	defer conn.Close()
+
+	slog.Info("ws: connected", "remote", r.RemoteAddr, "god_mode", godMode)
 
 	readWait := 120 * time.Second
 	_ = conn.SetReadDeadline(time.Now().Add(readWait))
@@ -54,7 +56,9 @@ func chatWebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		_, payload, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("websocket read: %v", err)
+				slog.Warn("ws: unexpected close", "error", err, "remote", r.RemoteAddr)
+			} else {
+				slog.Info("ws: disconnected", "remote", r.RemoteAddr)
 			}
 			break
 		}
@@ -66,6 +70,9 @@ func chatWebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		slog.Info("ws: message received", "text_len", len(userText), "god_mode", godMode, "remote", r.RemoteAddr)
+		start := time.Now()
+
 		var reply string
 		var runErr error
 		if godMode {
@@ -74,9 +81,12 @@ func chatWebSocketHandler(w http.ResponseWriter, r *http.Request) {
 			reply, runErr = runNarutoChatPipeline(userText)
 		}
 		if runErr != nil {
+			slog.Error("ws: pipeline error", "error", runErr, "duration", time.Since(start))
 			sendWSError(conn, runErr.Error())
 			continue
 		}
+
+		slog.Info("ws: reply sent", "reply_len", len(reply), "duration", time.Since(start))
 
 		out := wsOutbound{Reply: reply, God: godMode}
 		b, err := json.Marshal(out)

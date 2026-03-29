@@ -10,8 +10,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/joho/godotenv"
 
@@ -87,6 +90,7 @@ func llmHandler(w http.ResponseWriter, r *http.Request) {
 
 	var reqBody LLMRequest
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		slog.Warn("llm: invalid json body", "error", err)
 		http.Error(w, "invalid json body", http.StatusBadRequest)
 		return
 	}
@@ -94,19 +98,19 @@ func llmHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "prompt is required", http.StatusBadRequest)
 		return
 	}
-	//MOCK mode
-	if os.Getenv("MOCK_LLM") == "true" {
-		mock := LLMResponse{
-			Answer: "[MOCK] Ho ricevuto il prompt: " + reqBody.Prompt,
-		}
 
+	slog.Info("llm: request", "prompt_len", len(reqBody.Prompt))
+
+	if os.Getenv("MOCK_LLM") == "true" {
+		slog.Info("llm: mock mode")
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mock)
+		json.NewEncoder(w).Encode(LLMResponse{Answer: "[MOCK] Ho ricevuto il prompt: " + reqBody.Prompt})
 		return
 	}
 
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
+		slog.Error("llm: missing OPENAI_API_KEY")
 		http.Error(w, "missing OPENAI_API_KEY", http.StatusInternalServerError)
 		return
 	}
@@ -125,51 +129,54 @@ func llmHandler(w http.ResponseWriter, r *http.Request) {
 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
+		slog.Error("llm: marshal payload", "error", err)
 		http.Error(w, "failed to build llm request", http.StatusInternalServerError)
 		return
 	}
 
-	req, err := http.NewRequest(
-		http.MethodPost,
-		"https://api.openai.com/v1/chat/completions",
-		bytes.NewBuffer(payloadBytes),
-	)
+	start := time.Now()
+	req, err := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(payloadBytes))
 	if err != nil {
+		slog.Error("llm: create request", "error", err)
 		http.Error(w, "failed to create llm request", http.StatusInternalServerError)
 		return
 	}
-
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		slog.Error("llm: openai call failed", "error", err, "duration", time.Since(start))
 		http.Error(w, "failed calling llm api", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
+	duration := time.Since(start)
+
 	if resp.StatusCode >= 300 {
+		slog.Error("llm: openai error", "status", resp.StatusCode, "body", string(respBody), "duration", duration)
 		http.Error(w, "llm api error: "+string(respBody), http.StatusBadGateway)
 		return
 	}
 
 	var llmResp openAIChatResponse
 	if err := json.Unmarshal(respBody, &llmResp); err != nil {
+		slog.Error("llm: parse response", "error", err)
 		http.Error(w, "failed parsing llm response", http.StatusInternalServerError)
 		return
 	}
 
 	if len(llmResp.Choices) == 0 {
+		slog.Warn("llm: empty choices from openai")
 		http.Error(w, "empty llm response", http.StatusBadGateway)
 		return
 	}
 
-	out := LLMResponse{Answer: llmResp.Choices[0].Message.Content}
+	slog.Info("llm: success", "model", model, "answer_len", len(llmResp.Choices[0].Message.Content), "duration", duration)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(out)
+	json.NewEncoder(w).Encode(LLMResponse{Answer: llmResp.Choices[0].Message.Content})
 }
 
 // BestemmiaHandler handler per una 2.3 bestemmia endpoint
@@ -187,23 +194,48 @@ func BestemmiaHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "ciao %s che voi Porco Dio", nome)
 	}
 }
+func logMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(sw, r)
+		slog.Info("http",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", sw.status,
+			"duration", time.Since(start).Round(time.Millisecond),
+			"remote", r.RemoteAddr,
+		)
+	})
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (sw *statusWriter) WriteHeader(code int) {
+	sw.status = code
+	sw.ResponseWriter.WriteHeader(code)
+}
+
 func main() {
 	_ = godotenv.Load()
 
-	// Swagger UI: http://localhost:3000/swagger/index.html
-	http.HandleFunc("/swagger/*", httpSwagger.WrapHandler)
+	mux := http.NewServeMux()
 
-	http.HandleFunc("/", rootHandler)
-	http.HandleFunc("/saluta/con-bestemmia", BestemmiaHandler)
-	http.HandleFunc("/saluta", salutaHandler)
-	http.HandleFunc("/llm", llmHandler)
-	http.HandleFunc("/naruto/chat", narutoChatHandler)
-	// WebSocket chat: ws://localhost:3000/ws/chat  oppure  ?god=1 per modalità senza Dattebayo
-	http.HandleFunc("/ws/chat", chatWebSocketHandler)
+	mux.HandleFunc("/swagger/*", httpSwagger.WrapHandler)
+	mux.HandleFunc("/", rootHandler)
+	mux.HandleFunc("/saluta/con-bestemmia", BestemmiaHandler)
+	mux.HandleFunc("/saluta", salutaHandler)
+	mux.HandleFunc("/llm", llmHandler)
+	mux.HandleFunc("/naruto/chat", narutoChatHandler)
+	mux.HandleFunc("/ws/chat", chatWebSocketHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "3000"
 	}
-	http.ListenAndServe(":"+port, nil)
+	slog.Info("server starting", "port", port, "mock_llm", os.Getenv("MOCK_LLM") == "true")
+	log.Fatal(http.ListenAndServe(":"+port, logMiddleware(mux)))
 }
