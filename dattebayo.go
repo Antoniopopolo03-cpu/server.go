@@ -1,43 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 )
-
-const dattebayoBaseURL = "https://dattebayo-api.onrender.com"
-
-// stringSliceFlexible decodifica JSON sia come array di stringhe sia come singola stringa
-// (l'API Dattebayo a volte manda "classification" in un modo o nell'altro).
-type stringSliceFlexible []string
-
-func (s *stringSliceFlexible) UnmarshalJSON(data []byte) error {
-	if string(data) == "null" {
-		*s = nil
-		return nil
-	}
-	if len(data) > 0 && data[0] == '"' {
-		var one string
-		if err := json.Unmarshal(data, &one); err != nil {
-			return err
-		}
-		*s = []string{one}
-		return nil
-	}
-	var arr []string
-	if err := json.Unmarshal(data, &arr); err != nil {
-		return err
-	}
-	*s = arr
-	return nil
-}
-
-// --- Request/response del tuo endpoint /naruto/chat ---
 
 type NarutoChatRequest struct {
 	Message string `json:"message"`
@@ -46,78 +16,6 @@ type NarutoChatRequest struct {
 type NarutoChatResponse struct {
 	Reply string `json:"reply"`
 }
-
-// --- JSON Dattebayo (personaggi) ---
-
-type dattebayoCharactersResponse struct {
-	Characters []dattebayoCharacter `json:"characters"`
-	Total      int                  `json:"total"`
-}
-
-type dattebayoCharacter struct {
-	ID       int      `json:"id"`
-	Name     string   `json:"name"`
-	Images   []string `json:"images"`
-	Personal struct {
-		Clan           string              `json:"clan"`
-		Affiliation    stringSliceFlexible `json:"affiliation"`
-		Sex            string              `json:"sex"`
-		Birthdate      string              `json:"birthdate"`
-		Classification stringSliceFlexible `json:"classification"`
-	} `json:"personal"`
-	Rank struct {
-		NinjaRank struct {
-			PartI  string `json:"Part I"`
-			PartII string `json:"Part II"`
-			Gaiden string `json:"Gaiden"`
-		} `json:"ninjaRank"`
-	} `json:"rank"`
-	Debut struct {
-		Anime string `json:"anime"`
-		Manga string `json:"manga"`
-	} `json:"debut"`
-	Family map[string]string `json:"family"`
-	// Lista molto lunga nell'API; inclusa in bozza solo se l'utente chiede tecniche/jutsu
-	Jutsu []string `json:"jutsu"`
-}
-
-// --- JSON Dattebayo (clan) ---
-
-type dattebayoClansResponse struct {
-	Clans []dattebayoClan `json:"clans"`
-	Total int             `json:"total"`
-}
-
-type dattebayoClan struct {
-	ID         int    `json:"id"`
-	Name       string `json:"name"`
-	Characters []int  `json:"characters"`
-}
-
-// --- HTTP verso Dattebayo ---
-
-func dattebayoGET(collection, name string, limit int) ([]byte, error) {
-	u, err := url.Parse(dattebayoBaseURL + "/" + collection)
-	if err != nil {
-		return nil, err
-	}
-	q := u.Query()
-	q.Set("page", "1")
-	q.Set("limit", fmt.Sprintf("%d", limit))
-	if strings.TrimSpace(name) != "" {
-		q.Set("name", name)
-	}
-	u.RawQuery = q.Encode()
-
-	resp, err := http.Get(u.String())
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
-}
-
-// --- Router messaggio utente ---
 
 func detectCollection(msg string) string {
 	l := strings.ToLower(msg)
@@ -142,7 +40,7 @@ func extractSearchTerm(msg string) string {
 	return m
 }
 
-// shortFactualQuery rileva domande che vogliono risposta secca (una parola / pochissime parole).
+// shortFactualQuery rileva domande che vogliono risposta secca.
 func shortFactualQuery(msg string) bool {
 	m := strings.ToLower(strings.TrimSpace(msg))
 	keywords := []string{
@@ -157,7 +55,7 @@ func shortFactualQuery(msg string) bool {
 	return false
 }
 
-// includeJutsuInDraft: se true, nella bozza si allegano le tecniche dall'API (lista troncata).
+// includeJutsuInDraft: se true, nella bozza si allegano le tecniche API (lista troncata).
 func includeJutsuInDraft(userQuery string) bool {
 	m := strings.ToLower(userQuery)
 	keys := []string{
@@ -171,49 +69,45 @@ func includeJutsuInDraft(userQuery string) bool {
 	return false
 }
 
-// --- Bozza per OpenAI ---
-
-func draftFromCharacters(list []dattebayoCharacter, userQuery string) string {
+func draftFromCharacters(list []CanonicalCharacter, userQuery string, source string) string {
 	if len(list) == 0 {
-		return "Nessun personaggio trovato nell'API Dattebayo per questa ricerca."
+		return "Nessun personaggio trovato nelle API per questa ricerca."
 	}
 	var b strings.Builder
-	b.WriteString("Dati API Dattebayo (personaggi). Riassumi in italiano usando SOLO questi dati.\n\n")
+	b.WriteString(fmt.Sprintf("Dati API aggregate (source principale: %s). Riassumi in italiano usando SOLO questi dati.\n\n", source))
+
 	max := 3
 	if len(list) < max {
 		max = len(list)
 	}
 	for i := 0; i < max; i++ {
 		c := list[i]
-		b.WriteString(fmt.Sprintf("- %s (id %d)\n", c.Name, c.ID))
-		if c.Personal.Clan != "" {
-			b.WriteString(fmt.Sprintf("  Clan: %s\n", c.Personal.Clan))
+		b.WriteString(fmt.Sprintf("- %s (id %s, source %s)\n", c.Name, c.ID, c.Source))
+		if c.Clan != "" {
+			b.WriteString(fmt.Sprintf("  Clan: %s\n", c.Clan))
 		}
-		if len(c.Personal.Affiliation) > 0 {
-			b.WriteString(fmt.Sprintf("  Affiliazione: %s\n", strings.Join([]string(c.Personal.Affiliation), ", ")))
+		if len(c.Affiliation) > 0 {
+			b.WriteString(fmt.Sprintf("  Affiliazione: %s\n", strings.Join(c.Affiliation, ", ")))
 		}
-		if c.Personal.Sex != "" {
-			b.WriteString(fmt.Sprintf("  Sesso: %s\n", c.Personal.Sex))
+		if c.Sex != "" {
+			b.WriteString(fmt.Sprintf("  Sesso: %s\n", c.Sex))
 		}
-		if c.Personal.Birthdate != "" {
-			b.WriteString(fmt.Sprintf("  Compleanno: %s\n", c.Personal.Birthdate))
+		if c.Birthdate != "" {
+			b.WriteString(fmt.Sprintf("  Compleanno: %s\n", c.Birthdate))
 		}
-		if len(c.Personal.Classification) > 0 {
-			b.WriteString(fmt.Sprintf("  Classificazione: %s\n", strings.Join([]string(c.Personal.Classification), ", ")))
+		if len(c.Classification) > 0 {
+			b.WriteString(fmt.Sprintf("  Classificazione: %s\n", strings.Join(c.Classification, ", ")))
 		}
-		r := c.Rank.NinjaRank
-		if r.PartI != "" || r.PartII != "" || r.Gaiden != "" {
-			b.WriteString(fmt.Sprintf("  Rango ninja: Part I=%s, Part II=%s, Gaiden=%s\n", r.PartI, r.PartII, r.Gaiden))
+		if c.RankPartI != "" || c.RankPartII != "" || c.RankGaiden != "" {
+			b.WriteString(fmt.Sprintf("  Rango ninja: Part I=%s, Part II=%s, Gaiden=%s\n", c.RankPartI, c.RankPartII, c.RankGaiden))
 		}
-		if c.Debut.Anime != "" {
-			b.WriteString(fmt.Sprintf("  Debut anime: %s\n", c.Debut.Anime))
+		if c.DebutAnime != "" {
+			b.WriteString(fmt.Sprintf("  Debut anime: %s\n", c.DebutAnime))
 		}
-		if c.Debut.Manga != "" {
-			b.WriteString(fmt.Sprintf("  Debut manga: %s\n", c.Debut.Manga))
+		if c.DebutManga != "" {
+			b.WriteString(fmt.Sprintf("  Debut manga: %s\n", c.DebutManga))
 		}
-		if len(c.Images) > 0 {
-			b.WriteString(fmt.Sprintf("  Immagine (prima URL): %s\n", c.Images[0]))
-		}
+		// Evita di includere URL nella bozza, così la risposta finale non espone link API/immagini.
 		if includeJutsuInDraft(userQuery) && len(c.Jutsu) > 0 {
 			jLimit := 45
 			if len(c.Jutsu) < jLimit {
@@ -235,49 +129,57 @@ func draftFromCharacters(list []dattebayoCharacter, userQuery string) string {
 	return b.String()
 }
 
-func draftFromClans(list []dattebayoClan) string {
+func draftFromClans(list []CanonicalClan, source string) string {
 	if len(list) == 0 {
-		return "Nessun clan trovato nell'API Dattebayo per questa ricerca."
+		return "Nessun clan trovato nelle API per questa ricerca."
 	}
 	var b strings.Builder
-	b.WriteString("Dati API Dattebayo (clan). Riassumi in italiano usando SOLO questi dati.\n\n")
+	b.WriteString(fmt.Sprintf("Dati API aggregate (source principale: %s). Riassumi in italiano usando SOLO questi dati.\n\n", source))
 	for _, cl := range list {
-		b.WriteString(fmt.Sprintf("- Clan %s (id %d), personaggi collegati (id numerici): %d totali\n",
-			cl.Name, cl.ID, len(cl.Characters)))
+		b.WriteString(fmt.Sprintf("- Clan %s (id %s, source %s), personaggi collegati: %d totali\n",
+			cl.Name, cl.ID, cl.Source, cl.CharacterCount))
 	}
 	return b.String()
 }
 
-// runNarutoChatPipeline esegue Dattebayo → bozza → OpenAI (stessa logica di POST /naruto/chat).
-// Usata da HTTP e WebSocket per evitare duplicazione.
-func runNarutoChatPipeline(message string) (string, error) {
+func newNarutoRegistry() *ProviderRegistry {
+	return NewProviderRegistry(
+		NewDattebayoProvider(),
+		NewNarutoDBProvider(),
+		NewJikanProvider(),
+	)
+}
+
+// runNarutoChatPipelineWithSource esegue provider multipli -> bozza -> OpenAI
+// e ritorna anche il provider principale usato per i dati (solo uso interno).
+func runNarutoChatPipelineWithSource(message string) (string, string, error) {
 	msg := strings.TrimSpace(message)
 	if msg == "" {
-		return "", fmt.Errorf("message is required")
+		return "", "", fmt.Errorf("message is required")
 	}
 
 	collection := detectCollection(msg)
 	term := extractSearchTerm(msg)
-
-	raw, err := dattebayoGET(collection, term, 5)
-	if err != nil {
-		return "", fmt.Errorf("dattebayo request failed: %w", err)
-	}
+	registry := newNarutoRegistry()
+	ctx := context.Background()
 
 	var draft string
+	var providerUsed string
 	switch collection {
 	case "clans":
-		var parsed dattebayoClansResponse
-		if err := json.Unmarshal(raw, &parsed); err != nil {
-			return "", fmt.Errorf("failed parsing clans json: %w", err)
+		clans, source, err := registry.SearchClansFirst(ctx, SearchRequest{Query: term, Limit: 5})
+		if err != nil {
+			return "", "", fmt.Errorf("provider clan search failed: %w", err)
 		}
-		draft = draftFromClans(parsed.Clans)
+		draft = draftFromClans(clans, source)
+		providerUsed = source
 	default:
-		var parsed dattebayoCharactersResponse
-		if err := json.Unmarshal(raw, &parsed); err != nil {
-			return "", fmt.Errorf("failed parsing characters json: %w", err)
+		chars, source, err := registry.SearchCharactersFirst(ctx, SearchRequest{Query: term, Limit: 5})
+		if err != nil {
+			return "", "", fmt.Errorf("provider character search failed: %w", err)
 		}
-		draft = draftFromCharacters(parsed.Characters, msg)
+		draft = draftFromCharacters(chars, msg, source)
+		providerUsed = source
 	}
 
 	var system string
@@ -301,13 +203,23 @@ PRECISIONE:
 Non mostrare JSON nella risposta finale.`
 	}
 
-	userContent := "Domanda esatta dell'utente: " + msg + "\n\nDati API Dattebayo (unica fonte per fatti):\n" + draft
-	return openAIChat(system, userContent)
+	userContent := "Domanda esatta dell'utente: " + msg + "\n\nDati API aggregate (unica fonte per fatti):\n" + draft
+	reply, err := openAIChat(system, userContent)
+	if err != nil {
+		return "", providerUsed, err
+	}
+	return reply, providerUsed, nil
+}
+
+// runNarutoChatPipeline mantiene retrocompatibilità per i callsite che non usano provider_used.
+func runNarutoChatPipeline(message string) (string, error) {
+	reply, _, err := runNarutoChatPipelineWithSource(message)
+	return reply, err
 }
 
 // godModeSystemPrompt definisce come risponde la god mode (tutto in OpenAI, senza Dattebayo).
 // Priorità: 1) variabile d'ambiente GOD_MODE_SYSTEM (testo completo del system prompt)
-//           2) altrimenti GOD_MODE_STYLE: default | breve | elenco | didattico
+// 2) altrimenti GOD_MODE_STYLE: default | breve | elenco | didattico
 func godModeSystemPrompt() string {
 	if s := strings.TrimSpace(os.Getenv("GOD_MODE_SYSTEM")); s != "" {
 		return s
@@ -367,7 +279,7 @@ func narutoChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reply, err := runNarutoChatPipeline(req.Message)
+	reply, _, err := runNarutoChatPipelineWithSource(req.Message)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return

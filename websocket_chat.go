@@ -71,7 +71,7 @@ func chatWebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		if godMode {
 			reply, runErr = runNarutoChatGod(userText)
 		} else {
-			reply, runErr = runNarutoChatPipeline(userText)
+			reply, _, runErr = runNarutoChatPipelineWithSource(userText)
 		}
 		if runErr != nil {
 			sendWSError(conn, runErr.Error())
